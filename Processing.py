@@ -2,7 +2,12 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-from rasterio.plot import show
+#from rasterio.plot import show
+import pandas as pd 
+from sentinelhub import SHConfig, MimeType, CRS, BBox, SentinelHubRequest, SentinelHubDownloadClient, \
+    DataCollection, bbox_to_dimensions
+import datetime
+
 
 
 def normalize(array):
@@ -21,46 +26,58 @@ def RGBnorm(raster,img_shape=True):
       rgb=rasterio.plot.reshape_as_raster(rgb)
     return rgb
 
-def reproject_raster(raster_in,raster_out,dst_crs):
 
-  with rasterio.open(raster_in) as src:
-      transform, width, height = calculate_default_transform(
-          src.crs, dst_crs, src.width, src.height, *src.bounds)
-      kwargs = src.meta.copy()
-      kwargs.update({
-          'crs': dst_crs,
-          'transform': transform,
-          'width': width,
-          'height': height
-          })
-      kwargs['photometric'] = 'RGB'
+def RequestSatImg(time_interval,evalscript,coords_bbox,size,config,ski_area,ccov=0.8,collection=DataCollection.SENTINEL2_L2A):
+    """ SentinelHubRequest for timeinterval with given evalscript 
+    time_interval: tuple,string,datetimeobject,
+    evalscript: string
+    coord_bbox: sentinelhub.geometry.BBox
+    size: tuple
+    config: sentinelhub sh config
+    ski_area: string 
+    ccov: int
+    collection: sentinelhub.DataCollection"""
+    folder = 'Data/Satellite_data/' + ski_area
+    return SentinelHubRequest(
+    data_folder=folder,
+    evalscript=evalscript,
+    input_data=[
+        SentinelHubRequest.input_data(
+            data_collection=collection,
+            maxcc=ccov,
+            time_interval=time_interval,
+            mosaicking_order='leastCC'
+        )
+    ],
+    responses=[
+        SentinelHubRequest.output_response('default', MimeType.TIFF)
+    ],
+    bbox=coords_bbox,
+    size=size,
+    config=config
+)
 
-      with rasterio.open(raster_out, 'w', **kwargs) as dst:
-          for i in range(1, src.count + 1):
-              reproject(
-                  source=rasterio.band(src, i),
-                  destination=rasterio.band(dst, i),
-                  src_transform=src.transform,
-                  src_crs=src.crs,
-                  dst_transform=transform,
-                  dst_crs=dst_crs,
-                  resampling=Resampling.nearest)
-              
-def crop_to_skiarea(raster_in,raster_out,skiarea):
-  with rasterio.open(raster_in) as src:
-    out_image,out_transform = rasterio.mask.mask(src,ski_areas.loc[ski_areas.NAME == skiarea].geometry,crop=True)
-    out_meta = src.meta
+def DownloadTimeseries(from_date,to_date,evalscript,coords_bbox,size,config,ski_area):
+    """ Downloads satellite image weekly timeseries 
+    from_date: datetime object
+    to_date: datetime object
+    evalscript: string
+    coord_bbox: sentinelhub.geometry.BBox
+    size: tuple
+    config: sentinelhub sh config
+    ski_area: string """
+    delta = abs(to_date-from_date).days//7
+    dates = [(from_date + datetime.timedelta(weeks=x),from_date + datetime.timedelta(weeks=x+1)) for x in range(delta+1)]
+    list_of_requests = [RequestSatImg(date,evalscript,coords_bbox,size,config,ski_area) for date in dates]
+    list_of_requests = [request.download_list[0] for request in list_of_requests]
+    SentinelHubDownloadClient(config=config).download(list_of_requests, max_threads=5)
 
-  out_meta.update({"driver": "GTiff",
-                 "height": out_image.shape[1],
-                 "width": out_image.shape[2],
-                 "transform": out_transform})
-  out_meta['photometric'] = 'RGB'
-  with rasterio.open(raster_out,'r+',**out_meta) as dest:
-    dest.write(out_image)
-
-def crop_and_transform(raster_in,raster_out,crs,skiarea):
-  reproject_raster(raster_in,raster_out,crs)
-  crop_to_skiarea(raster_out,raster_out,skiarea)
-
-
+def GetBBoxSize(ski_areas,name):
+    """ Creates bbox and size for a given ski area
+    ski_areas: geopandas.DataFrame
+    name: string"""
+    coords = ski_areas.loc[ski_areas.NAME == name].geometry.bounds.to_numpy()[0]
+    res = 10
+    coords_bbox = BBox(bbox=[x for x in coords],crs=CRS.WGS84)
+    size = bbox_to_dimensions(coords_bbox,resolution=res)
+    return coords_bbox,size
