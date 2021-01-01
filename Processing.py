@@ -7,6 +7,8 @@ import pandas as pd
 from sentinelhub import SHConfig, MimeType, CRS, BBox, SentinelHubRequest, SentinelHubDownloadClient, \
     DataCollection, bbox_to_dimensions
 import datetime
+import os
+import shutil
 
 
 
@@ -37,7 +39,8 @@ def RequestSatImg(time_interval,evalscript,coords_bbox,size,config,ski_area,ccov
     ski_area: string 
     ccov: int
     collection: sentinelhub.DataCollection"""
-    folder = 'Data/Satellite_data/' + ski_area
+    year = time_interval[0].year
+    folder = 'Data/Satellite_data/' + ski_area + '/RawData/' + str(year)
     return SentinelHubRequest(
     data_folder=folder,
     evalscript=evalscript,
@@ -81,3 +84,34 @@ def GetBBoxSize(ski_areas,name):
     coords_bbox = BBox(bbox=[x for x in coords],crs=CRS.WGS84)
     size = bbox_to_dimensions(coords_bbox,resolution=res)
     return coords_bbox,size
+
+def rename_file_with_date(rename_folder):
+    folder_ls = [root for root,_,_ in os.walk(rename_folder) if (len(root)-len(rename_folder)) == 33]
+    for folder in folder_ls:
+        file_ls = os.listdir(folder)
+        try:
+            if file_ls[0] != 'request.json':
+                print('No response file found')
+                continue
+            df = pd.read_json(os.path.join(folder,file_ls[0]))
+            time_dict = df['payload'][3]
+            date=time_dict.get('data')[0].get('dataFilter').get('timeRange').get('from')[:10]
+            os.rename(os.path.join(folder,file_ls[1]),os.path.join(folder,date+'.tiff'))
+        except Exception as e:
+            print(e)
+            pass
+def copy_files(search_folder,target_folder):
+    copy_dict = {}
+    for root,_,files in os.walk(search_folder):
+        for file in files:
+            if file.endswith('.tiff'):
+                copy_dict[os.path.join(root,file)] = os.path.join(target_folder,file)
+    for k,v in copy_dict.items():
+        shutil.copyfile(k,v)
+
+def del_empty_files(folder_path):
+    files = [f for f in os.listdir(folder_path) if f.endswith('.tiff')]
+    del_files = [f for f in files if os.stat(os.path.join(folder_path,f)).st_size <= 100000]
+    for f in del_files:
+        os.remove(os.path.join(folder_path,f))
+    return
